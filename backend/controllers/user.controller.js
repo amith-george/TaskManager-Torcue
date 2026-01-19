@@ -20,7 +20,7 @@ const syncUser = async (req,res) => {
             message = "New employee created";
             console.log("New employee created: ", email);
 
-            io.emit('user_registered', user);
+            io.to('admin-room').emit('user_registered', user);
         }
 
         return responseHandler.success(res, message, user);
