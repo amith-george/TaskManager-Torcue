@@ -5,6 +5,7 @@ const responseHandler = require('../utils/responseHandler');
 // Create tasks for an employee
 const createTask = async (req,res) => {
     const { title, date, deadline, assignedTo } = req.body;
+    const io = req.app.get('io');
 
     try {
         const newTask = await Task.create({
@@ -16,6 +17,11 @@ const createTask = async (req,res) => {
         });
 
         const populatedTask = await newTask.populate('assignedTo', 'email');
+
+        const employeeId = populatedTask.assignedTo._id.toString();
+        io.to(employeeId).emit('task_created', populatedTask);
+
+        io.to('admin-room').emit('task_created', populatedTask);
 
         return responseHandler.success(res, "Task Created successfully.", populatedTask, 201);
     } catch (error) {
@@ -87,6 +93,7 @@ const getMyTasks = async (req, res) => {
 const updateTaskStatus = async (req,res) => {
     const { status } = req.body;
     const taskId = req.params.id;
+    const io = req.app.get('io');
 
     if (!mongoose.Types.ObjectId.isValid(taskId)) {
         return responseHandler.error(res, "Invalid Task ID format.", 400);
@@ -104,8 +111,19 @@ const updateTaskStatus = async (req,res) => {
             return responseHandler.error(res, "Not authorized to update task.", 403);
         }
 
+        if (task.status === 'Completed') {
+            return responseHandler.error(res, "Completed tasks cannot be updated", 400);
+        }
+
         task.status = status;
         await task.save();
+
+        await task.populate('assignedTo','email');
+
+        const employeeId = task.assignedTo._id.toString();
+        io.to(employeeId).emit('task_updated', task);
+
+        io.to('admin-room').emit('task_updated', task);
 
         return responseHandler.success(res, "Task updated successfully.", task);
     } catch(error) {
@@ -118,17 +136,26 @@ const updateTaskStatus = async (req,res) => {
 // Delete a task
 const deleteTask = async (req, res) => {
     const taskId = req.params.id;
+    const io = req.app.get('io');
 
     if (!mongoose.Types.ObjectId.isValid(taskId)) {
         return responseHandler.error(res, "Invalid Task ID format.", 400);
     }
 
     try {
-        const deletedTask = await Task.findByIdAndDelete(taskId);
+        
+        const taskToDelete = await Task.findById(taskId);
 
-        if (!deletedTask) {
+        if (!taskToDelete) {
             return responseHandler.error(res, "Task not found.", 404);
         }
+
+        const employeeId = taskToDelete.assignedTo.toString();
+
+        await Task.findByIdAndDelete(taskId);
+
+        io.to(employeeId).emit('task_deleted', taskId);
+        io.to('admin-room').emit('task_deleted', taskId);
 
         return responseHandler.success(res, "Task deleted successfully.");
     } catch (error) {

@@ -12,6 +12,7 @@ import { Loader2 } from "lucide-react";
 
 import EmployeeHeader from "@/app/dashboard/EmployeeHeader";
 import KanbanColumn from "@/app/dashboard/KanbanColumn";
+import { useSocket } from "@/hooks/useSocket"; 
 
 interface Task {
   _id: string;
@@ -19,12 +20,13 @@ interface Task {
   date: string;
   deadline: string;
   status: "To Do" | "Current" | "Completed"; 
-  assignedTo: string;
+  assignedTo: string | { _id: string, email: string }; 
 }
 
 export default function EmployeeDashboard() {
   const { user, loading: authLoading } = useAuth();
   const router = useRouter();
+  const socket = useSocket(); 
 
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loadingData, setLoadingData] = useState(true);
@@ -48,10 +50,43 @@ export default function EmployeeDashboard() {
     }
   }, [user, authLoading, router]);
 
+  // Socket Listeners
+  useEffect(() => {
+    if (!socket || !user) return;
+
+    // 1. Task Created
+    socket.on("task_created", (newTask: any) => {
+        const assignedId = typeof newTask.assignedTo === 'object' 
+            ? newTask.assignedTo._id 
+            : newTask.assignedTo;
+
+        if (assignedId === user._id) {
+            toast.success("New task assigned!");
+            setTasks((prev) => [...prev, newTask]);
+        }
+    });
+
+    // 2. Task Updated
+    socket.on("task_updated", (updatedTask: any) => {
+        setTasks((prev) => prev.map((t) => t._id === updatedTask._id ? updatedTask : t));
+    });
+
+    // 3. Task Deleted
+    socket.on("task_deleted", (deletedId: string) => {
+        setTasks((prev) => prev.filter((t) => t._id !== deletedId));
+    });
+
+    return () => {
+        socket.off("task_created");
+        socket.off("task_updated");
+        socket.off("task_deleted");
+    };
+  }, [socket, user]);
+
+
   const fetchMyTasks = async () => {
     try {
       const response = await api.get("/tasks/my-tasks");
-
       setTasks(response.data.data || []);
     } catch (error) {
       toast.error("Failed to load your tasks.");
@@ -94,7 +129,6 @@ export default function EmployeeDashboard() {
 
     try {
       await api.patch(`/tasks/${draggableId}/status`, { status: newStatus });
-      toast.success(`Moved to ${newStatus}`);
     } catch (error) {
       toast.error("Failed to update status");
       setTasks(previousTasks);
@@ -116,14 +150,11 @@ export default function EmployeeDashboard() {
   if (!enabled) return null;
 
   return (
-    // RESPONSIVE: Added overflow-hidden for desktop to keep the board strict
-    // On mobile, it will just scroll naturally
     <div className="min-h-screen bg-gray-50 p-4 md:p-6 dark:bg-black md:overflow-hidden">
       
       <EmployeeHeader user={user} handleLogout={handleLogout} />
 
       <DragDropContext onDragEnd={onDragEnd}>
-        {/* RESPONSIVE: grid-cols-1 for mobile, md:grid-cols-3 for desktop */}
         <div className="grid grid-cols-1 gap-6 pb-8 md:grid-cols-3 md:pb-0">
           
           <KanbanColumn 

@@ -5,6 +5,7 @@ const responseHandler = require('../utils/responseHandler');
 const syncUser = async (req,res) => {
 
     const { firebaseUid, email } = req.body;
+    const io = req.app.get('io');
 
     try {
         let user = await User.findOne({ firebaseUid });
@@ -18,6 +19,8 @@ const syncUser = async (req,res) => {
             });
             message = "New employee created";
             console.log("New employee created: ", email);
+
+            io.emit('user_registered', user);
         }
 
         return responseHandler.success(res, message, user);

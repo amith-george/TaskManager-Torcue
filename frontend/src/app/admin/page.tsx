@@ -13,14 +13,29 @@ import AdminHeader from "@/app/admin/AdminHeader";
 import CreateTaskForm from "@/app/admin/CreateTaskForm";
 import TaskGrid from "@/app/admin/TaskGrid";
 import TaskStats from "@/app/admin/TaskStats"; 
+import { useSocket } from "@/hooks/useSocket"; 
+
+// Updated Notification Interface
+interface Notification {
+  id: number;
+  taskTitle: string;
+  newStatus: string;
+  userEmail: string;
+  time: string;
+}
 
 export default function AdminDashboard() {
   const { user, loading: authLoading } = useAuth();
   const router = useRouter();
+  const socket = useSocket(); 
 
-  const [tasks, setTasks] = useState([]);
-  const [users, setUsers] = useState([]);
+  const [tasks, setTasks] = useState<any[]>([]);
+  const [users, setUsers] = useState<any[]>([]);
   const [stats, setStats] = useState({ total: 0, active: 0, completed: 0, urgent: 0 }); 
+  
+  // Notification State
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  
   const [searchQuery, setSearchQuery] = useState("");
   const [showUrgent, setShowUrgent] = useState(false);
   const [filterStatus, setFilterStatus] = useState("active"); 
@@ -44,6 +59,71 @@ export default function AdminDashboard() {
     }, 500);
     return () => clearTimeout(timer);
   }, [searchQuery, showUrgent, filterStatus]); 
+
+  // Socket Listeners
+  useEffect(() => {
+    if (!socket) return;
+
+    // 1. Task Created
+    socket.on("task_created", (newTask: any) => {
+        setTasks((prev) => [newTask, ...prev]);
+        refreshStats();
+    });
+
+    // 2. Task Updated
+    socket.on("task_updated", (updatedTask: any) => {
+        // Update Grid
+        setTasks((prev) => prev.map((t) => t._id === updatedTask._id ? updatedTask : t));
+        refreshStats();
+
+        // NEW: Add structured Notification
+        // Safely access email since we populated it in the backend
+        const email = typeof updatedTask.assignedTo === 'object' 
+            ? updatedTask.assignedTo.email 
+            : "Unknown User";
+
+        const notif: Notification = {
+          id: Date.now(),
+          taskTitle: updatedTask.title,
+          newStatus: updatedTask.status,
+          userEmail: email,
+          time: new Date().toLocaleString('en-GB', { 
+             day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' 
+          })
+        };
+        
+        setNotifications((prev) => [notif, ...prev]);
+        
+        // Removed Toast as requested
+    });
+
+    // 3. Task Deleted
+    socket.on("task_deleted", (deletedId: string) => {
+        setTasks((prev) => prev.filter((t) => t._id !== deletedId));
+        refreshStats();
+    });
+
+    // 4. User Registered
+    socket.on("user_registered", (newUser: any) => {
+        setUsers((prev: any) => [...prev, newUser]);
+    });
+
+    return () => {
+        socket.off("task_created");
+        socket.off("task_updated");
+        socket.off("task_deleted");
+        socket.off("user_registered");
+    };
+  }, [socket]);
+
+  const refreshStats = async () => {
+    try {
+        const { data } = await api.get("/tasks/stats");
+        setStats(data.data || { total: 0, active: 0, completed: 0, urgent: 0 });
+    } catch (e) {
+        console.error("Stats refresh failed", e);
+    }
+  };
 
   const fetchInitialData = async () => {
     try {
@@ -70,9 +150,7 @@ export default function AdminDashboard() {
       const { data } = await api.get(url);
       setTasks(data.data || []);
       
-      const statsRes = await api.get("/tasks/stats");
-      setStats(statsRes.data.data || { total: 0, active: 0, completed: 0, urgent: 0});
-
+      refreshStats(); 
     } catch (error) {
       console.error("Fetch error", error);
     }
@@ -102,7 +180,10 @@ export default function AdminDashboard() {
         setShowUrgent={setShowUrgent}
         filterStatus={filterStatus}
         setFilterStatus={setFilterStatus}
-        handleLogout={handleLogout} 
+        handleLogout={handleLogout}
+        // Pass Notifications Down
+        notifications={notifications}
+        clearNotifications={() => setNotifications([])} 
       />
 
       <div className="grid grid-cols-1 gap-8 lg:grid-cols-3">
@@ -121,7 +202,7 @@ export default function AdminDashboard() {
             tasks={tasks} 
             onTaskDeleted={(id) => {
                 setTasks(tasks.filter((t: any) => t._id !== id));
-                fetchTasks();
+                refreshStats(); 
             }} 
           />
         </div>
